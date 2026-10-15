@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0d1730"/>
+      <stop offset="1" stop-color="#0a1120"/>
+    </linearGradient>
+    <linearGradient id="paint" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#3b82f6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- badge -->
+  <rect x="8" y="8" width="496" height="496" rx="104" fill="url(#bg)" stroke="#1c2b47" stroke-width="4"/>
+
+  <!-- Bluetooth rune -->
+  <g fill="none" stroke="#3b82f6" stroke-width="26" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="256" y1="66" x2="256" y2="238"/>
+    <line x1="256" y1="66" x2="313" y2="110"/>
+    <line x1="256" y1="238" x2="313" y2="194"/>
+    <line x1="313" y1="110" x2="199" y2="194"/>
+    <line x1="313" y1="194" x2="199" y2="110"/>
+  </g>
+  <!-- subtle glow dot at crossing -->
+  <circle cx="256" cy="152" r="7" fill="#93c5fd"/>
+
+  <!-- painted banner the roller is laying down -->
+  <path d="M250 430 Q330 404 410 418 Q452 425 470 414 L470 470 Q452 462 410 470 Q330 480 250 468 Z"
+        fill="url(#paint)"/>
+  <!-- paint drip -->
+  <circle cx="243" cy="486" r="10" fill="#2563eb"/>
+  <path d="M243 468 q-6 10 0 18 q6 -8 0 -18 Z" fill="#2563eb"/>
+
+  <!-- the word, as if painted -->
+  <text x="356" y="455" text-anchor="middle"
+        font-family="'Marker Felt','Comic Sans MS','Segoe Print',cursive"
+        font-size="64" font-weight="700" fill="#eaf2ff"
+        transform="rotate(-4 356 448)">BLEPrint</text>
+
+  <!-- stick figure (monito) -->
+  <g fill="none" stroke="#e8eef7" stroke-width="12" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="150" cy="332" r="20" fill="none"/>
+    <line x1="150" y1="352" x2="150" y2="406"/>        <!-- body -->
+    <line x1="150" y1="406" x2="128" y2="446"/>        <!-- leg L -->
+    <line x1="150" y1="406" x2="172" y2="446"/>        <!-- leg R -->
+    <line x1="150" y1="368" x2="116" y2="392"/>        <!-- arm L -->
+    <line x1="150" y1="368" x2="206" y2="372"/>        <!-- arm R to roller -->
+  </g>
+
+  <!-- paint roller in the right hand -->
+  <g stroke-linecap="round" stroke-linejoin="round">
+    <line x1="206" y1="372" x2="250" y2="344" stroke="#cbd5e1" stroke-width="10"/>  <!-- handle -->
+    <line x1="250" y1="344" x2="262" y2="352" stroke="#cbd5e1" stroke-width="10"/>  <!-- frame -->
+    <rect x="256" y="330" width="46" height="24" rx="10" transform="rotate(34 279 342)"
+          fill="#3b82f6" stroke="#1d4ed8" stroke-width="4"/>                        <!-- roller head -->
+  </g>
+</svg>
