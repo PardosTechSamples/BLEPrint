@@ -1,0 +1,10 @@
+# Build / env
+.buildvenv/
+__pycache__/
+*.pyc
+build/
+dist/
+.DS_Store
+
+# Rendered icon intermediates are fine to keep; raw iconset is not
+assets/logo.iconset/
