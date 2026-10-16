@@ -401,7 +401,7 @@ class Main(QMainWindow):
 
         lv.addWidget(self._h("Label size (mm) & print settings"))
         form = QGridLayout()
-        self.e_head = QLineEdit("15")
+        self.e_head = QLineEdit("14")
         self.e_feed = QLineEdit("40")
         self.e_gap = QLineEdit("2.0")
         self.e_density = QLineEdit("10")
@@ -547,7 +547,7 @@ class Main(QMainWindow):
                 self._free_head = self.e_head.text()
             self.e_head.setText(f"{cls.fixed_head_mm:g}")
         elif not self.e_head.isEnabled():
-            self.e_head.setText(getattr(self, "_free_head", "15"))
+            self.e_head.setText(getattr(self, "_free_head", "14"))
         self.e_head.setEnabled(cls.fixed_head_mm is None)
         self.chk_fit.setEnabled(cls.supports_fit_length)
         self.chk_fit.setToolTip("" if cls.supports_fit_length else "Only on continuous-tape printers (Supvan).")

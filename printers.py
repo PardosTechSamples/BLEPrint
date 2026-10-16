@@ -19,7 +19,7 @@ from bleak import BleakScanner
 
 import qrlabel
 import supvan
-from bleprint import BlePrinter
+from bleprint import FEED_MARGIN_DOTS, BlePrinter, head_dots_for
 
 # Known MAC prefixes of label printers.
 #   A4:93:40  Beijing Supvan Information Technology Co.,Ltd. (IEEE MA-L registry)
@@ -171,8 +171,8 @@ class NelkoDriver(Driver):
     def render(text, p):
         if p.get("qr"):
             dpmm = 203 / 25.4
-            img = qrlabel.render_qr_label(text, int(round(p["head_mm"] * dpmm)),
-                                          int(round(p["feed_mm"] * dpmm)), margin=16,
+            img = qrlabel.render_qr_label(text, head_dots_for(p["head_mm"]),
+                                          int(round(p["feed_mm"] * dpmm)), margin=FEED_MARGIN_DOTS,
                                           show_text=p.get("qr_text", True))
             return img.rotate(90, expand=True)   # -> head_dots wide x feed_dots tall, like text
         return BlePrinter.render_text_label(text, p["head_mm"], p["feed_mm"])

@@ -23,6 +23,17 @@ SERVICE = "0000ff00-0000-1000-8000-00805f9b34fb"
 CHAR_WRITE = "0000ff02-0000-1000-8000-00805f9b34fb"
 CHAR_NOTIFY = "0000ff01-0000-1000-8000-00805f9b34fb"
 
+# The P21's print head is 12 mm = 96 dots wide at 203 dpi (Nelko model data: maxWidth 12), centred on
+# 14-15 mm labels; bitmaps wider than that are cut off. Along the feed only part of the label is
+# printable (40 mm label -> 35.5 mm), so text keeps 18 dots (2.25 mm) from each end.
+HEAD_DOTS = 96
+FEED_MARGIN_DOTS = 18
+
+
+def head_dots_for(head_mm, dpi=203):
+    """Dots used across the head for a label head_mm wide (capped at the 96-dot head)."""
+    return min(int(round(head_mm * dpi / 25.4)), HEAD_DOTS)
+
 
 class BlePrinter:
     def __init__(self, device):
@@ -119,22 +130,24 @@ class BlePrinter:
     # ---- printing ----
     #
     # Label geometry note (verified on a P21):
-    #   head_mm  = label dimension ACROSS the print head  (e.g. 15 for a 15x40 label)
+    #   head_mm  = label dimension ACROSS the print head  (e.g. 14 for a 14x40 label)
     #   feed_mm  = label dimension ALONG the feed/paper path (e.g. 40)
-    # TSPL `SIZE head_mm mm,feed_mm mm`. The bitmap is head_dots wide x feed_dots tall.
-    # A "15x40mm" roll is 15 mm across the head and 40 mm long, so to print text
-    # reading along the length you render landscape then rotate 90 degrees.
+    # TSPL `SIZE head_mm mm,feed_mm mm`. The bitmap is head_dots_for(head_mm) wide (at most the
+    # 96-dot head) x feed_dots tall. A "14x40mm" roll is 14 mm across the head and 40 mm long, so to
+    # print text reading along the length you render landscape then rotate 90 degrees.
 
     @staticmethod
     def render_text_label(text, head_mm, feed_mm, dpi=203, along_length=True,
-                          margin_dots=16, max_font=200):
+                          margin_dots=12, max_font=200):
         """Render `text` to a 1-bit PIL image sized for the label (head_dots x feed_dots)."""
         from PIL import Image, ImageDraw, ImageFont
 
-        head_dots = int(round(head_mm * dpi / 25.4))
+        head_dots = head_dots_for(head_mm, dpi)
         feed_dots = int(round(feed_mm * dpi / 25.4))
         # Canvas we lay text on: if reading along the length, draw landscape then rotate.
         cw, ch = (feed_dots, head_dots) if along_length else (head_dots, feed_dots)
+        # margin_dots across the head; the printable-length margin at both ends along the feed
+        mw, mh = (2 * FEED_MARGIN_DOTS, margin_dots) if along_length else (margin_dots, 2 * FEED_MARGIN_DOTS)
 
         img = Image.new("L", (cw, ch), 255)
         d = ImageDraw.Draw(img)
@@ -146,7 +159,7 @@ class BlePrinter:
                 for sz in range(max_font, 8, -2):
                     f = ImageFont.truetype(path, sz)
                     l, t, r, b = d.textbbox((0, 0), text, font=f)
-                    if (r - l) <= cw - margin_dots and (b - t) <= ch - margin_dots:
+                    if (r - l) <= cw - mw and (b - t) <= ch - mh:
                         font = f
                         break
                 if font:
@@ -169,7 +182,7 @@ class BlePrinter:
         head_mm = size across the print head, feed_mm = size along the feed.
         The image is resized to (head_dots x feed_dots). density: darkness 0-15.
         """
-        head_dots = int(round(head_mm * dpi / 25.4))
+        head_dots = head_dots_for(head_mm, dpi)
         feed_dots = int(round(feed_mm * dpi / 25.4))
 
         img = image.convert("L").resize((head_dots, feed_dots))
