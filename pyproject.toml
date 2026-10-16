@@ -17,7 +17,8 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/bleprint"
+Homepage = "https://github.com/PardosTechSamples/BLEPrint"
+Issues = "https://github.com/PardosTechSamples/BLEPrint/issues"
 
 # GUI entry point: `bleprint` launches the app (pip install . then run `bleprint`).
 [project.gui-scripts]
