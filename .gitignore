@@ -1,5 +1,6 @@
 # Build / env
 .buildvenv/
+.venv/
 __pycache__/
 *.pyc
 build/

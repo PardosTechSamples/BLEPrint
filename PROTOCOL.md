@@ -66,3 +66,41 @@ So `SIZE 15 mm,40 mm`, bitmap 120 wide × 320 tall. To print text reading along 
 prints a rotated, clipped label.)
 
 - DPI: 203 · head width: ~15 mm printable · default gap: ~2 mm
+
+---
+
+## Supvan E10 (T10/T15) BLE protocol (verified live 2026-10-15)
+
+Source: Supvan IPrinter 3.9.18 (`SFBLEManager`, `SFPrintUtils`). The E10 shows up as `T0132F25…`, handled by `SFDeviceT10Model` (type 15, T15 print path).
+
+### GATT
+- Service `0000E0FF-3C17-D293-8E48-14FE2E4DA212`
+- Write `FFE9` (write-without-response); notify `FFE1`. `FFEA` notify is unused.
+- No pairing or auth handshake is needed. The printer answers commands as soon as notify is enabled.
+
+### Command frame (16 bytes)
+`7E 5A 0C 00 | 10 01 AA <cmd> | <sum16 LE> | 00 01 <val16 LE> 00 00`, where sum16 = sum of bytes 10..15.
+
+### Response frame
+`7E 5A <len16 LE> 00 03 55 <cmd> <chk> ...payload`. len counts the bytes after the first 4.
+- 0x12 CHECK_DEVICE -> ok
+- 0x11 INQUERY_STA -> status registers (22-byte body)
+- 0xB8 RD_DEV_SN -> ASCII serial from offset 22 ("T0132F25…")
+- 0x16 RD_DEV_NAME -> ASCII from offset 22 ("E10pro")
+- 0x22 READ_DPI -> no reply on the E10
+
+### Opcodes (initCommonds)
+INQUERY_STA 0x11, CHECK_DEVICE 0x12, START_PRINT 0x13, STOP_PRINT 0x14, RD_DEV_NAME 0x16,
+READ_REV 0x17, STRD_MAT 0x18, PAPER_SKIP 0x2E, RETURN_MAT 0x30, NEXTFRM_BULK 0x5A,
+NEXT_ZIPPEDBULK 0x5C, SET_MAT_DATA 0x5F, RD_DEV_SN 0xB8, PAPER_BACK 0xBA, READ_FIRMWARE_REV 0xC5.
+
+### Printing (implemented in supvan_e10.py; job ran without errors 2026-10-15)
+Job encoding was cross-checked against khromov/supvan-katasymbol-printer-web-ui (MIT), `families/t15.ts`, and matches the iOS binary (buffer 0xFA0, `0x5C` announce with 512, frame-marker nudges at 0x7A/0xFA/0x17A).
+1. INQUIRY_STA until not busy. Status bytes are at [14..19] and battery mV at [24..25].
+2. SET_HEADRATE 0xC9 = 80 + 10*(density-1), then START_PRINT 0x13 (arg 0), then poll until the printing bit (b[2]&0x40) is set.
+3. PAPER_BACK 0xBA(back columns).
+4. For each 4000-byte buffer: wait until !bufferFull, send `0x5C(512, nframes)`, then 512-byte data frames
+   `7E 5A FC 01 10 02 AA BB <sum16> <idx> <cnt> <500 B>`. Each frame goes as four 128-byte writes and the printer acks each one. Then send BUF_FULL 0x10(0).
+5. Poll until not printing and not busy.
+Buffer layout: [0..1] checksum, [2] page flags (start 0x02, end 0x04, job end 0x08, cut<<4), [3] density<<2|0x10, [4..5] columns, [6]=12, [8]=1, [10]=1, [12] skip, then 12 bytes per column (row r -> byte r/8, bit r%8; design in the middle 88 of 96 dots).
+Each buffer is compressed with LZMA (lc3 lp0 pb2, 8 KB dict) behind a 13-byte .lzma header.

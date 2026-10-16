@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-BLEPrint - batch label printer GUI for Nelko(R) P21 and compatible BLE printers.
+BLEPrint - batch label printer GUI for Nelko(R) P21, Supvan(R) E10 and compatible BLE printers.
 
 Open a CSV, build a label from its columns with a {Column} template,
 preview any row, and print one row or the whole file over Bluetooth LE.
 
-Compatible with the Nelko(R) P21 and similar JieLi-based BLE label printers.
-"Nelko" and "P21" are trademarks of their owner, used to describe compatibility.
+Compatible with the Nelko(R) P21 and the Supvan(R) / Katasymbol E10 (T10/T15 family).
+"Nelko", "P21", "Supvan", "Katasymbol" and "E10" are trademarks of their owners, used only to
+describe compatibility.
 
 Run:  python gui.py        (launch from a Terminal so macOS can grant Bluetooth access)
 Deps: pip install PyQt6 bleak pillow
@@ -23,13 +24,14 @@ from pathlib import Path
 from PIL import Image
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction, QPixmap
+from PyQt6.QtCore import QSettings
 from PyQt6.QtWidgets import (
-    QApplication, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QLabel,
-    QLineEdit, QMainWindow, QMessageBox, QProgressBar, QPushButton,
-    QPlainTextEdit, QSplitter, QVBoxLayout, QWidget,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QFileDialog, QFrame, QGridLayout,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMessageBox, QProgressBar,
+    QPushButton, QPlainTextEdit, QSplitter, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
-from bleprint import BlePrinter
+import printers
 
 
 QSS_DARK = """
@@ -44,6 +46,17 @@ QPushButton#ok:hover { background: #065f46; }
 QPushButton#warn { background: #b45309; }
 QPushButton#warn:hover { background: #92400e; }
 QLineEdit, QPlainTextEdit { background: #05080f; color: #e8eef7; border: 1px solid #2a3a52; border-radius: 4px; padding: 4px 6px; }
+QLineEdit:disabled { color: #6b7a90; background: #0d1422; }
+QCheckBox { spacing: 6px; }
+QComboBox { background: #05080f; color: #e8eef7; border: 1px solid #2a3a52; border-radius: 4px; padding: 3px 8px; min-width: 130px; }
+QComboBox QAbstractItemView { background: #121a2b; color: #e8eef7; selection-background-color: #1d4ed8; }
+QCheckBox::indicator { width: 14px; height: 14px; border: 1px solid #3b4d68; border-radius: 3px; background: #05080f; }
+QCheckBox::indicator:checked { background: #3b82f6; border-color: #3b82f6; }
+QCheckBox:disabled { color: #6b7a90; }
+QCheckBox::indicator:disabled { background: #1a2333; border-color: #2a3a52; }
+QTableWidget { background: #05080f; alternate-background-color: #0b1220; gridline-color: #1c2738; border: 1px solid #2a3a52; }
+QTableWidget::item:selected { background: #1d4ed8; color: white; }
+QHeaderView::section { background: #121a2b; color: #8b9bb4; border: none; padding: 4px 6px; }
 QLabel#brand { font-size: 15px; font-weight: 800; }
 QLabel#muted { color: #8b9bb4; font-size: 11px; }
 QLabel#chip { background:#182234; border:1px solid #2a3a52; border-radius:4px; padding:3px 6px; }
@@ -57,18 +70,21 @@ QProgressBar::chunk { background:#3b82f6; border-radius:3px; }
 
 # --------------------------------------------------------------- BLE worker
 class BleWorker(QThread):
-    """Owns an asyncio loop + a persistent BlePrinter; runs BLE coroutines."""
+    """Owns an asyncio loop + the connected printer driver; runs BLE coroutines."""
 
     sig_log = pyqtSignal(str)
     sig_conn = pyqtSignal(bool, str)      # connected?, detail
     sig_prog = pyqtSignal(int, int)       # value, maximum
     sig_busy = pyqtSignal(bool)
+    sig_scan = pyqtSignal(object)         # list[printers.Found]
+    sig_pause = pyqtSignal(int, int)      # labels done, total: ask the user to cut, then continue
 
     def __init__(self):
         super().__init__()
         self.loop: asyncio.AbstractEventLoop | None = None
-        self.printer: BlePrinter | None = None
+        self.driver: printers.Driver | None = None
         self._ready = False
+        self._resume: asyncio.Future | None = None
 
     def run(self):
         self.loop = asyncio.new_event_loop()
@@ -91,72 +107,193 @@ class BleWorker(QThread):
 
     @property
     def connected(self):
-        return self.printer is not None and self.printer.is_connected
+        return self.driver is not None and self.driver.is_connected
 
     # ---- high-level ops (call from GUI thread) ----
-    def connect(self):
-        self._submit(self._connect())
+    def scan(self, timeout=8.0):
+        self._submit(self._scan(timeout))
+
+    def connect(self, found):
+        self._submit(self._connect(found))
 
     def disconnect(self):
         self._submit(self._disconnect())
 
-    def print_jobs(self, jobs):
-        """jobs: list of (pil_image, params-dict). Prints each, paced."""
-        self._submit(self._print_jobs(jobs))
+    def print_jobs(self, images, params):
+        self._submit(self._print_jobs(images, params))
 
-    async def _connect(self):
+    async def _scan(self, timeout):
+        self.sig_log.emit(f"Searching for Bluetooth devices ({timeout:.0f} s)…")
+        found = await printers.scan(timeout)
+        known = sum(1 for f in found if f.brand)
+        self.sig_log.emit(f"Found {len(found)} devices, {known} supported printer(s).")
+        self.sig_scan.emit(found)
+
+    async def _connect(self, found):
         if self.connected:
+            await self._disconnect()
+        cls = printers.DRIVERS.get(found.brand)
+        if cls is None:
+            self.sig_log.emit(f"“{found.name or found.address}” is not a supported printer.")
             return
         self.sig_busy.emit(True)
-        self.sig_log.emit("Scanning for P21…")
-        dev = await BlePrinter.discover("P21", timeout=12.0)
-        if not dev:
-            self.sig_log.emit("No P21 found (is it on, phone app closed?)")
-            self.sig_busy.emit(False)
-            return
-        pr = BlePrinter(dev)
-        await pr.connect()
-        self.printer = pr
-        self.sig_conn.emit(True, f"MTU {pr.mtu}")
-        self.sig_log.emit(f"Connected to {dev.name} (MTU {pr.mtu}). LED should be blue.")
+        self.sig_log.emit(f"Connecting to {found.name or found.address}…")
+        drv = cls(found)
+        detail = await drv.connect(self.sig_log.emit)
+        self.driver = drv
+        self.sig_conn.emit(True, detail or drv.label)
+        self.sig_log.emit(f"Connected to {found.name} ({drv.label}).")
         self.sig_busy.emit(False)
 
     async def _disconnect(self):
-        if self.printer:
-            await self.printer.disconnect()
-            self.printer = None
+        if self.driver:
+            try:
+                await self.driver.disconnect()
+            finally:
+                self.driver = None
         self.sig_conn.emit(False, "")
         self.sig_log.emit("Disconnected.")
 
-    async def _ensure(self):
-        if not self.connected:
-            await self._connect()
-        return self.connected
+    def resume(self, go_on: bool):
+        """Answer a sig_pause prompt (call from the GUI thread)."""
+        fut = self._resume
+        if fut is not None and self.loop:
+            self.loop.call_soon_threadsafe(lambda: fut.done() or fut.set_result(go_on))
 
-    async def _print_jobs(self, jobs):
-        self.sig_busy.emit(True)
-        if not await self._ensure():
-            self.sig_busy.emit(False)
+    async def _between(self, done, total):
+        self._resume = self.loop.create_future()
+        self.sig_pause.emit(done, total)
+        try:
+            return await self._resume
+        finally:
+            self._resume = None
+
+    async def _print_jobs(self, images, params):
+        if not self.connected:
+            self.sig_log.emit("Not connected — use Find printer… first.")
             return
-        total = len(jobs)
-        self.sig_prog.emit(0, total)
-        for i, (img, p) in enumerate(jobs, 1):
-            await self.printer.print_image(
-                img, p["head_mm"], p["feed_mm"], gap_mm=p["gap_mm"],
-                density=p["density"], speed=p["speed"])
-            self.sig_prog.emit(i, total)
-            self.sig_log.emit(f"  printed {i}/{total}")
-            await asyncio.sleep(_label_seconds(p))
-        self.sig_log.emit("Done.")
-        self.sig_busy.emit(False)
+        self.sig_busy.emit(True)
+        pause = (self.driver.pause_between_labels and not params.get("continuous")
+                 and len(images) > 1)
+        try:
+            await self.driver.print_labels(images, params, self.sig_log.emit, self.sig_prog.emit,
+                                           between=self._between if pause else None)
+            self.sig_log.emit("Done.")
+        finally:
+            self.sig_busy.emit(False)
 
     def shutdown(self):
         if self.loop:
             self.loop.call_soon_threadsafe(self.loop.stop)
 
 
-def _label_seconds(p):
-    return max(1.2, p["feed_mm"] / 25.0 + 0.9)
+# --------------------------------------------------------------- scan dialog
+class ScanDialog(QDialog):
+    """Search for Bluetooth devices and pick a printer. Brand comes from MAC prefix / name / service."""
+
+    def __init__(self, parent, ble: BleWorker):
+        super().__init__(parent)
+        self.setWindowTitle("Find printer")
+        self.resize(720, 420)
+        self.ble = ble
+        self.found: list = []
+        self.selected = None
+
+        v = QVBoxLayout(self)
+        hint = QLabel("Turn the printer on and close its phone app, then search. "
+                      "Supported printers are listed first; the brand is detected from the "
+                      "MAC prefix (OUI), the device name or its Bluetooth service.")
+        hint.setWordWrap(True)
+        hint.setObjectName("muted")
+        v.addWidget(hint)
+
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Name", "Brand", "Detected by", "MAC", "Signal"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hh = self.table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.table.itemSelectionChanged.connect(self._sel_changed)
+        self.table.itemDoubleClicked.connect(lambda _: self._accept())
+        v.addWidget(self.table, 1)
+
+        bar = QHBoxLayout()
+        self.chk_all = QCheckBox("Show all Bluetooth devices")
+        self.chk_all.toggled.connect(self._fill)
+        bar.addWidget(self.chk_all)
+        bar.addStretch(1)
+        self.status = QLabel("")
+        self.status.setObjectName("muted")
+        bar.addWidget(self.status)
+        self.btn_scan = QPushButton("Search again")
+        self.btn_scan.setObjectName("ghost")
+        self.btn_scan.clicked.connect(self.start_scan)
+        bar.addWidget(self.btn_scan)
+        self.btn_ok = QPushButton("Connect")
+        self.btn_ok.setObjectName("ok")
+        self.btn_ok.setEnabled(False)
+        self.btn_ok.clicked.connect(self._accept)
+        bar.addWidget(self.btn_ok)
+        v.addLayout(bar)
+
+        ble.sig_scan.connect(self._on_scan)
+        self.start_scan()
+
+    def start_scan(self):
+        self.btn_scan.setEnabled(False)
+        self.status.setText("Searching…")
+        self.ble.scan()
+
+    def _on_scan(self, found):
+        self.found = found
+        self.btn_scan.setEnabled(True)
+        n = sum(1 for f in found if f.brand)
+        self.status.setText(f"{n} printer(s), {len(found)} devices")
+        self._fill()
+
+    def _rows(self):
+        return [f for f in self.found if f.brand or self.chk_all.isChecked()]
+
+    def _fill(self):
+        rows = self._rows()
+        self.table.setRowCount(len(rows))
+        for r, f in enumerate(rows):
+            cells = [f.name or "(no name)", printers.BRAND_NAMES.get(f.brand, "—"),
+                     f.reason or "—", f.mac or ("hidden" if ":" not in f.address else f.address),
+                     f"{f.rssi} dBm"]
+            for c, text in enumerate(cells):
+                it = QTableWidgetItem(text)
+                if not f.brand:
+                    it.setForeground(Qt.GlobalColor.gray)
+                self.table.setItem(r, c, it)
+        if rows and rows[0].brand:
+            self.table.selectRow(0)
+        self._sel_changed()
+
+    def _current(self):
+        rows = self._rows()
+        idx = self.table.currentRow()
+        return rows[idx] if 0 <= idx < len(rows) else None
+
+    def _sel_changed(self):
+        f = self._current()
+        self.btn_ok.setEnabled(bool(f and f.brand))
+
+    def _accept(self):
+        f = self._current()
+        if f and f.brand:
+            self.selected = f
+            self.accept()
+
+    def done(self, r):
+        try:
+            self.ble.sig_scan.disconnect(self._on_scan)
+        except TypeError:
+            pass
+        super().done(r)
 
 
 # --------------------------------------------------------------- main window
@@ -169,18 +306,25 @@ class Main(QMainWindow):
         self.rows: list[dict] = []
         self.columns: list[str] = []
         self.cur = 0
+        self.settings = QSettings("BLEPrint", "BLEPrint")
+        self.brand = self.settings.value("brand", "nelko")
+        if self.brand not in printers.DRIVERS:
+            self.brand = "nelko"
+        self.found = None          # printers.Found picked in the scan dialog
 
         self.ble = BleWorker()
         self.ble.sig_log.connect(self.log)
         self.ble.sig_conn.connect(self.on_conn)
         self.ble.sig_prog.connect(self.on_prog)
         self.ble.sig_busy.connect(self.on_busy)
+        self.ble.sig_pause.connect(self.on_pause)
         self.ble.start()
 
         self._build()
         self._build_menu()
         self.setStyleSheet(QSS_DARK)
-        self.log("Ready. Open a CSV, edit the template, preview, then print.")
+        self._apply_brand(self.brand)
+        self.log("Ready. Find your printer, open a CSV, edit the template, preview, then print.")
         self._refresh_preview()
 
     # ---- menu / about ----
@@ -197,12 +341,15 @@ class Main(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "About BLEPrint",
-            "<h3>BLEPrint 0.1.0</h3>"
+            "<h3>BLEPrint 0.2.0</h3>"
             "<p>Open-source batch label printer over Bluetooth LE.</p>"
-            "<p><b>Compatible with the Nelko® P21 label printer</b> "
-            "(and similar JieLi-based BLE label printers).</p>"
-            "<p>“Nelko” and “P21” are trademarks of their respective owner, "
-            "used here only to describe compatibility.</p>"
+            "<p><b>Compatible with the Nelko® P21 and the Supvan® / Katasymbol E10</b> "
+            "(T10/T15 family) label printers.</p>"
+            "<p>“Nelko”, “P21”, “Supvan”, “Katasymbol” and “E10” are trademarks of their "
+            "respective owners, used here only to describe compatibility. BLEPrint is not "
+            "affiliated with either company.</p>"
+            "<p>The Supvan job encoding follows the MIT-licensed "
+            "supvan-katasymbol-printer-web-ui project (© Katasymbol Web contributors).</p>"
             "<p>MIT License.</p>"
         )
 
@@ -217,7 +364,7 @@ class Main(QMainWindow):
         brand = QLabel("BLEPrint")
         brand.setObjectName("brand")
         top.addWidget(brand)
-        tagline = QLabel("for Nelko® P21")
+        tagline = QLabel("for Nelko® P21 · Supvan® E10")
         tagline.setObjectName("muted")
         top.addWidget(tagline)
         top.addStretch(1)
@@ -228,6 +375,13 @@ class Main(QMainWindow):
         self.btn_open.setObjectName("ghost")
         self.btn_open.clicked.connect(self.open_csv)
         top.addWidget(self.btn_open)
+        self.dev_lbl = QLabel("No printer selected")
+        self.dev_lbl.setObjectName("chip")
+        top.addWidget(self.dev_lbl)
+        self.btn_find = QPushButton("Find printer…")
+        self.btn_find.setObjectName("ghost")
+        self.btn_find.clicked.connect(self.find_printer)
+        top.addWidget(self.btn_find)
         self.conn_dot = QLabel("● disconnected")
         self.conn_dot.setStyleSheet("color:#f87171; font-weight:700;")
         top.addWidget(self.conn_dot)
@@ -253,15 +407,39 @@ class Main(QMainWindow):
         self.e_density = QLineEdit("10")
         self.e_speed = QLineEdit("3")
         self.e_copies = QLineEdit("1")
+        self.lbl_density = QLabel("Density (0-15)")
         fields = [("Width across head", self.e_head), ("Length along feed", self.e_feed),
-                  ("Gap", self.e_gap), ("Density (0-15)", self.e_density),
+                  ("Gap", self.e_gap), (self.lbl_density, self.e_density),
                   ("Speed", self.e_speed), ("Copies / row", self.e_copies)]
         for i, (name, w) in enumerate(fields):
             w.setFixedWidth(70)
             w.textChanged.connect(self._refresh_preview)
-            form.addWidget(QLabel(name), i // 2, (i % 2) * 2)
+            form.addWidget(name if isinstance(name, QLabel) else QLabel(name), i // 2, (i % 2) * 2)
             form.addWidget(w, i // 2, (i % 2) * 2 + 1)
         lv.addLayout(form)
+        self.chk_fit = QCheckBox("Fit length to text (print edge to edge)")
+        self.chk_fit.setChecked(self.settings.value("fit_length", "true") == "true")
+        self.chk_fit.toggled.connect(self._fit_toggled)
+        lv.addWidget(self.chk_fit)
+        qr_row = QHBoxLayout()
+        qr_row.addWidget(QLabel("Print as"))
+        self.cmb_mode = QComboBox()
+        self.cmb_mode.addItems(["Text", "QR code + text", "QR code only"])
+        self.cmb_mode.setToolTip("QR codes scan best with short text, such as a URL or SKU.")
+        try:
+            self.cmb_mode.setCurrentIndex(int(self.settings.value("print_mode", 0)))
+        except (TypeError, ValueError):
+            pass
+        self.cmb_mode.currentIndexChanged.connect(self._mode_changed)
+        qr_row.addWidget(self.cmb_mode)
+        qr_row.addStretch(1)
+        lv.addLayout(qr_row)
+        self.chk_cont = QCheckBox("Continuous print (all labels in one job)")
+        lv.addWidget(self.chk_cont)
+        self.cont_note = QLabel("")
+        self.cont_note.setObjectName("muted")
+        self.cont_note.setWordWrap(True)
+        lv.addWidget(self.cont_note)
 
         lv.addWidget(self._h("Template — click a column to insert {Column}"))
         self.cols_box = QHBoxLayout()
@@ -334,8 +512,84 @@ class Main(QMainWindow):
     def toggle_conn(self):
         if self.ble.connected:
             self.ble.disconnect()
+        elif self.found is not None:
+            self.ble.connect(self.found)
         else:
-            self.ble.connect()
+            self.find_printer()
+
+    def find_printer(self):
+        dlg = ScanDialog(self, self.ble)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.selected is not None:
+            f = dlg.selected
+            self.found = f
+            self._apply_brand(f.brand)
+            self.dev_lbl.setText(f"{printers.BRAND_NAMES[f.brand]} · {f.name or f.address}")
+            self.log(f"Selected {f.name} — {printers.BRAND_NAMES[f.brand]} (detected by {f.reason})")
+            self.ble.connect(f)
+
+    def _apply_brand(self, brand):
+        """Adjust the settings panel to what the selected printer understands."""
+        self.brand = brand
+        self.settings.setValue("brand", brand)
+        cls = printers.DRIVERS[brand]
+        lo, hi = cls.density_range
+        self.lbl_density.setText(f"Density ({lo}-{hi})")
+        try:
+            d = int(float(self.e_density.text()))
+        except ValueError:
+            d = cls.default_density
+        if not lo <= d <= hi:
+            self.e_density.setText(str(cls.default_density))
+        self.e_gap.setEnabled(cls.uses_gap_speed)
+        self.e_speed.setEnabled(cls.uses_gap_speed)
+        if cls.fixed_head_mm:
+            if self.e_head.isEnabled():
+                self._free_head = self.e_head.text()
+            self.e_head.setText(f"{cls.fixed_head_mm:g}")
+        elif not self.e_head.isEnabled():
+            self.e_head.setText(getattr(self, "_free_head", "15"))
+        self.e_head.setEnabled(cls.fixed_head_mm is None)
+        self.chk_fit.setEnabled(cls.supports_fit_length)
+        self.chk_fit.setToolTip("" if cls.supports_fit_length else "Only on continuous-tape printers (Supvan).")
+        self.e_feed.setEnabled(not self._fit_on())
+        self.chk_cont.setEnabled(cls.supports_continuous)
+        if not cls.supports_continuous:
+            self.chk_cont.setChecked(False)
+        self.chk_cont.setToolTip(cls.continuous_note)
+        note = cls.continuous_note
+        if cls.pause_between_labels:
+            note += " Without it, BLEPrint pauses after each label so you can cut it."
+        self.cont_note.setText(note)
+        if self.found is None:
+            self.dev_lbl.setText(f"{printers.BRAND_NAMES[brand]} (not connected)")
+        self._refresh_preview()
+
+    def _fit_on(self):
+        return self.chk_fit.isEnabled() and self.chk_fit.isChecked()
+
+    def _fit_toggled(self, on):
+        self.settings.setValue("fit_length", "true" if on else "false")
+        self.e_feed.setEnabled(not self._fit_on())
+        self._refresh_preview()
+
+    def _mode_changed(self, idx):
+        self.settings.setValue("print_mode", idx)
+        self._refresh_preview()
+
+    def on_pause(self, done, total):
+        box = QMessageBox(self)
+        box.setWindowTitle("Label printed")
+        box.setIcon(QMessageBox.Icon.Information)
+        box.setText(f"<b>Label {done} of {total} printed.</b>")
+        box.setInformativeText("Cut it on the printer, then press Continue for the next label.")
+        go = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton("Stop printing", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(go)
+        QApplication.beep()
+        box.exec()
+        go_on = box.clickedButton() is go
+        self.log(f"  label {done}/{total} done — {'continuing' if go_on else 'stopped by user'}")
+        self.ble.resume(go_on)
 
     def on_conn(self, connected, detail):
         if connected:
@@ -352,7 +606,7 @@ class Main(QMainWindow):
         self.prog.setValue(value)
 
     def on_busy(self, busy):
-        for b in (self.btn_one, self.btn_all, self.btn_conn):
+        for b in (self.btn_one, self.btn_all, self.btn_conn, self.btn_find):
             b.setEnabled(not busy)
 
     # ---- params / rendering ----
@@ -369,7 +623,10 @@ class Main(QMainWindow):
                 return d
         return dict(head_mm=f(self.e_head, 15), feed_mm=f(self.e_feed, 40),
                     gap_mm=f(self.e_gap, 2.0), density=i(self.e_density, 10),
-                    speed=i(self.e_speed, 3), copies=max(1, i(self.e_copies, 1)))
+                    speed=i(self.e_speed, 3), copies=max(1, i(self.e_copies, 1)),
+                    continuous=self.chk_cont.isEnabled() and self.chk_cont.isChecked(),
+                    fit_length=self._fit_on(), qr=self.cmb_mode.currentIndex() > 0,
+                    qr_text=self.cmb_mode.currentIndex() == 1)
 
     def _text_for(self, idx):
         template = self.tmpl.toPlainText().rstrip("\n")
@@ -381,7 +638,7 @@ class Main(QMainWindow):
 
     def _render(self, idx):
         p = self._params()
-        return BlePrinter.render_text_label(self._text_for(idx), p["head_mm"], p["feed_mm"])
+        return printers.DRIVERS[self.brand].render(self._text_for(idx), p)
 
     def _refresh_preview(self):
         try:
@@ -389,10 +646,8 @@ class Main(QMainWindow):
         except Exception as e:
             self.log("Preview error: " + str(e))
             return
-        # Printed orientation reads along the label length (sideways on screen);
-        # rotate the DISPLAY copy back to landscape so it's readable. Printing is
-        # unchanged and still uses the properly-rotated raster from _render().
-        disp = img.rotate(-90, expand=True)
+        # Show the label reading left to right (the Nelko raster is stored sideways).
+        disp = printers.DRIVERS[self.brand].preview(img)
         buf = io.BytesIO()
         disp.convert("L").save(buf, format="PNG")
         pix = QPixmap()
@@ -442,26 +697,36 @@ class Main(QMainWindow):
     # ---- print ----
     def print_current(self):
         p = self._params()
+        if not self._check_printer():
+            return
         img = self._render(self.cur)
-        jobs = [(img, p)] * p["copies"]
-        self.log(f"Printing row {self.cur + 1} ×{p['copies']}…")
-        self.ble.print_jobs(jobs)
+        self.log(f"Printing row {self.cur + 1} ×{p['copies']}"
+                 f"{' (continuous)' if p['continuous'] else ''}…")
+        self.ble.print_jobs([img] * p["copies"], p)
 
     def print_all(self):
         if not self.rows:
             QMessageBox.information(self, "No data", "Open a CSV first.")
+            return
+        if not self._check_printer():
             return
         p = self._params()
         if QMessageBox.question(self, "Print all",
                                 f"Print {len(self.rows)} rows × {p['copies']} copy each?") \
                 != QMessageBox.StandardButton.Yes:
             return
-        jobs = []
+        images = []
         for i in range(len(self.rows)):
-            img = self._render(i)
-            jobs += [(img, p)] * p["copies"]
-        self.log(f"Batch printing {len(self.rows)} rows ({len(jobs)} labels)…")
-        self.ble.print_jobs(jobs)
+            images += [self._render(i)] * p["copies"]
+        self.log(f"Batch printing {len(self.rows)} rows ({len(images)} labels)"
+                 f"{' as one continuous job' if p['continuous'] else ''}…")
+        self.ble.print_jobs(images, p)
+
+    def _check_printer(self):
+        if self.ble.connected:
+            return True
+        QMessageBox.information(self, "No printer", "Connect to a printer first (Find printer…).")
+        return False
 
     def closeEvent(self, ev):
         try:
