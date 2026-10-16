@@ -20,7 +20,7 @@ source "$VENV/bin/activate" 2>/dev/null || source "$VENV/Scripts/activate"
 
 echo "==> Installing dependencies"
 pip install --quiet --upgrade pip
-pip install --quiet PyQt6 bleak pillow pyinstaller
+pip install --quiet PyQt6 bleak pillow segno pyinstaller
 
 echo "==> Building with PyInstaller"
 pyinstaller --noconfirm BLEPrint.spec

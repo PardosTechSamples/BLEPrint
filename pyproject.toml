@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bleprint"
-version = "0.1.0"
-description = "Open-source batch label printer for Nelko P21 and compatible BLE printers (unaffiliated)."
+version = "0.2.0"
+description = "Open-source batch label printer for Nelko P21 and Supvan E10 BLE label printers (unaffiliated)."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -13,6 +13,7 @@ dependencies = [
     "PyQt6>=6.6",
     "bleak>=0.22",
     "pillow>=10.0",
+    "segno>=1.5",
 ]
 
 [project.urls]
@@ -23,4 +24,4 @@ Homepage = "https://github.com/your-org/bleprint"
 bleprint = "gui:main"
 
 [tool.setuptools]
-py-modules = ["bleprint", "gui"]
+py-modules = ["bleprint", "gui", "printers", "qrlabel", "supvan"]
