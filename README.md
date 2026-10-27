@@ -5,9 +5,9 @@ Open-source desktop tool to print labels on the **Nelko® P21** and the
 
 - **Find printer…**: search Bluetooth, see which devices are supported printers, and pick one.
   The brand is detected from the MAC prefix (OUI), then the device name, then its GATT service
-- **Continuous print** (Supvan E10): send every label in one job so they print back to back.
-  Disabled on the Nelko P21 until it has been tested there. Without it, BLEPrint pauses after
-  each label ("Label 1 of 5 printed") so you can cut it, then press **Continue**
+- **Continuous print** (Supvan E10, continuous tape): send every label in one job so they print back
+  to back. Without it, BLEPrint pauses after each label ("Label 1 of 5 printed") so you can cut it,
+  then press **Continue**
 - **Fit length to text** (Supvan E10): the label is exactly as long as the text, at full tape
   height, so it prints edge to edge instead of centered on a fixed-length label
 - **Print as QR**: *QR code + text* or *QR code only*. The code fills the full printable height
@@ -22,10 +22,10 @@ Open-source desktop tool to print labels on the **Nelko® P21** and the
 > "Nelko", "P21", "Supvan", "Katasymbol" and "E10" are trademarks of their respective
 > owners, used here only to describe compatibility. BLEPrint is not affiliated with either.
 
-| Printer | Detected by | Language | Continuous print |
+| Printer | Detected by | Language | Labels |
 |---|---|---|---|
-| Nelko P21 | MAC prefix `BE:C0:11`, name `P21…`, service `FF00` | TSPL text over BLE | off (untested) |
-| Supvan E10 / T10 | OUI `A4:93:40` (Beijing Supvan), name `T0xxx…`, service `E0FF…` | `7E 5A` frames + LZMA bitmaps | on |
+| Nelko P21 | MAC prefix `BE:C0:11`, name `P21…`, service `FF00` | TSPL text over BLE, 96-dot (12 mm) head | individual die-cut labels; size and gap come from the loaded roll |
+| Supvan E10 / T10 | OUI `A4:93:40` (Beijing Supvan), name `T0xxx…`, service `E0FF…` | `7E 5A` frames + LZMA bitmaps, 96-dot head | continuous tape: one job, or label by label with a cut prompt |
 
 macOS never shows a device's MAC address, but both printers advertise their own MAC in the
 last 6 bytes of their manufacturer data, so OUI detection works on macOS as well as Windows.

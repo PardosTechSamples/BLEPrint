@@ -553,7 +553,9 @@ class Main(QMainWindow):
         self.chk_fit.setEnabled(cls.supports_fit_length)
         self.chk_fit.setToolTip("" if cls.supports_fit_length else "Only on continuous-tape printers (Supvan).")
         self.e_feed.setEnabled(not self._fit_on())
+        # Continuous print only exists on continuous-tape printers (Supvan); hide it otherwise.
         self.chk_cont.setEnabled(cls.supports_continuous)
+        self.chk_cont.setVisible(cls.supports_continuous)
         if not cls.supports_continuous:
             self.chk_cont.setChecked(False)
         self.chk_cont.setToolTip(cls.continuous_note)
@@ -561,6 +563,7 @@ class Main(QMainWindow):
         if cls.pause_between_labels:
             note += " Without it, BLEPrint pauses after each label so you can cut it."
         self.cont_note.setText(note)
+        self.cont_note.setVisible(bool(note))
         if self.found is None:
             self.dev_lbl.setText(f"{printers.BRAND_NAMES[brand]} (not connected)")
         self._refresh_preview()

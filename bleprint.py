@@ -177,7 +177,7 @@ class BlePrinter:
             try:
                 for sz in range(max_font, 8, -2):
                     f = ImageFont.truetype(path, sz)
-                    l, t, r, b = d.textbbox((0, 0), text, font=f)
+                    l, t, r, b = d.textbbox((0, 0), text, font=f, align="center")
                     if (r - l) <= cw - mw and (b - t) <= ch - mh:
                         font = f
                         break
@@ -187,8 +187,9 @@ class BlePrinter:
                 continue
         if font is None:
             font = ImageFont.load_default()
-        l, t, r, b = d.textbbox((0, 0), text, font=font)
-        d.text(((cw - (r - l)) // 2 - l, (ch - (b - t)) // 2 - t), text, fill=0, font=font)
+        l, t, r, b = d.textbbox((0, 0), text, font=font, align="center")
+        d.text(((cw - (r - l)) // 2 - l, (ch - (b - t)) // 2 - t), text, fill=0, font=font,
+               align="center")   # each line centred, not just the block
         if along_length:
             img = img.rotate(90, expand=True)   # -> head_dots wide x feed_dots tall
         return img

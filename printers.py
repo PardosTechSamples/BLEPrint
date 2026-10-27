@@ -150,7 +150,7 @@ class NelkoDriver(Driver):
     brand = "nelko"
     label = "Nelko P21"
     supports_continuous = False
-    continuous_note = "Continuous printing is disabled on the Nelko P21 until it has been tested."
+    continuous_note = ""          # the P21 prints individual die-cut labels; no continuous mode
 
     def __init__(self, found):
         super().__init__(found)
