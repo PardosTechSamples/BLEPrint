@@ -33,7 +33,7 @@ app = BUNDLE(
     info_plist={
         'CFBundleName': 'BLEPrint',
         'CFBundleDisplayName': 'BLEPrint',
-        'CFBundleShortVersionString': '0.2.0',
+        'CFBundleShortVersionString': '0.2.1',
         'NSHighResolutionCapable': True,
         'NSBluetoothAlwaysUsageDescription':
             'BLEPrint uses Bluetooth to connect to your label printer.',

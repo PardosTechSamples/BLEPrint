@@ -341,7 +341,7 @@ class Main(QMainWindow):
     def _show_about(self):
         QMessageBox.about(
             self, "About BLEPrint",
-            "<h3>BLEPrint 0.2.0</h3>"
+            "<h3>BLEPrint 0.2.1</h3>"
             "<p>Open-source batch label printer over Bluetooth LE.</p>"
             "<p><b>Compatible with the Nelko® P21 and the Supvan® / Katasymbol E10</b> "
             "(T10/T15 family) label printers.</p>"
