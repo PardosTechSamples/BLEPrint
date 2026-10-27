@@ -29,6 +29,25 @@ CHAR_NOTIFY = "0000ff01-0000-1000-8000-00805f9b34fb"
 HEAD_DOTS = 96
 FEED_MARGIN_DOTS = 18
 
+# ESC ! ? -> one status byte (0 = ready); same bytes as the vendor SDK's getPrinterStatus.
+STATUS_QUERY = b"\x1b!?\r\n"
+# Sent once after the last label of a batch, like the vendor SDK's printAllEnd.
+ALL_END = b"ALLEND\r\n"
+
+
+def status_error(s):
+    """TSPL status byte -> error text, or None when the printer can carry on."""
+    for bit, msg in ((0x01, "Print head is open"), (0x40, "Cover is open"), (0x02, "Paper jam"),
+                     (0x04, "Out of labels"), (0x80, "Printer error")):
+        if s & bit:
+            return msg
+    return None
+
+
+def status_busy(s):
+    """True while the printer is still printing or paused."""
+    return bool(s & 0x30)
+
 
 def head_dots_for(head_mm, dpi=203):
     """Dots used across the head for a label head_mm wide (capped at the 96-dot head)."""
@@ -174,8 +193,19 @@ class BlePrinter:
             img = img.rotate(90, expand=True)   # -> head_dots wide x feed_dots tall
         return img
 
-    async def print_image(self, image, head_mm, feed_mm, gap_mm=2.0,
-                          density=10, speed=3, dpi=203, threshold=128):
+    async def status(self, timeout=1.0):
+        """One status byte from ESC ! ?, or None if the printer doesn't answer."""
+        self._rx.clear()
+        self._rx_event.clear()
+        await self.send(STATUS_QUERY)
+        try:
+            await asyncio.wait_for(self._rx_event.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        return self._rx[0] if self._rx else None
+
+    async def print_image(self, image, head_mm, feed_mm, gap_mm=None,
+                          density=10, speed=3, dpi=203, threshold=128, copies=1):
         """
         Print a PIL image as a monochrome TSPL label.
 
@@ -206,8 +236,8 @@ class BlePrinter:
         # Build ONE contiguous TSPL job buffer, exactly like the SDK does:
         # SIZE / GAP / DIRECTION / REFERENCE / DENSITY / SPEED / CLS / BITMAP+raster / PRINT
         job = bytearray()
-        job += f"SIZE {head_mm} mm,{feed_mm} mm\r\n".encode("latin1")
-        job += f"GAP {gap_mm:.1f} mm,0 mm\r\n".encode("latin1")
+        # No SIZE / GAP: the P21 reads the loaded roll (RFID-tagged) and sets label size and gap
+        # itself. Sending our own values overrode that, and a wrong gap shifted every later label.
         job += b"DIRECTION 0,0\r\n"
         job += b"REFERENCE 0,0\r\n"
         job += f"DENSITY {density}\r\n".encode("latin1")
@@ -216,7 +246,7 @@ class BlePrinter:
         job += f"BITMAP 0,0,{width_bytes},{feed_dots},0,".encode("latin1")
         job += bytes(raster)
         job += b"\r\n"
-        job += b"PRINT 1\r\n"
+        job += f"PRINT {max(1, copies)}\r\n".encode("latin1")   # copies from one job, like the vendor app
         await self.send(bytes(job))
 
     async def print_text(self, text, head_mm, feed_mm, **kw):

@@ -540,7 +540,8 @@ class Main(QMainWindow):
             d = cls.default_density
         if not lo <= d <= hi:
             self.e_density.setText(str(cls.default_density))
-        self.e_gap.setEnabled(cls.uses_gap_speed)
+        self.e_gap.setEnabled(False)            # set by the printer from the loaded label roll
+        self.e_gap.setToolTip("Set by the printer from the loaded label roll.")
         self.e_speed.setEnabled(cls.uses_gap_speed)
         if cls.fixed_head_mm:
             if self.e_head.isEnabled():
@@ -664,7 +665,7 @@ class Main(QMainWindow):
             return
         try:
             with open(path, newline="", encoding="utf-8-sig") as fh:
-                reader = csv.DictReader(fh)
+                reader = csv.DictReader(fh, skipinitialspace=True)   # "Names, Model"
                 self.columns = list(reader.fieldnames or [])
                 self.rows = [dict(r) for r in reader]
         except Exception as e:

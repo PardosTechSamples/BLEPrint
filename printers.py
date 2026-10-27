@@ -19,7 +19,7 @@ from bleak import BleakScanner
 
 import qrlabel
 import supvan
-from bleprint import FEED_MARGIN_DOTS, BlePrinter, head_dots_for
+from bleprint import ALL_END, FEED_MARGIN_DOTS, BlePrinter, head_dots_for, status_busy, status_error
 
 # Known MAC prefixes of label printers.
 #   A4:93:40  Beijing Supvan Information Technology Co.,Ltd. (IEEE MA-L registry)
@@ -181,15 +181,44 @@ class NelkoDriver(Driver):
     def preview(img):
         return img.rotate(-90, expand=True)
 
+    async def _wait_until_idle(self, labels, p):
+        """Wait until the labels already sent are printed: polls ESC ! ? when the printer answers it,
+        otherwise waits about as long as `labels` labels take."""
+        estimate = max(1.2, p["feed_mm"] / 25.0 + 0.9) * max(1, labels)
+        s = await self.p.status()
+        if s is None:
+            await asyncio.sleep(estimate)
+            return
+        deadline = asyncio.get_running_loop().time() + estimate + 30
+        while status_busy(s) and asyncio.get_running_loop().time() < deadline:
+            await asyncio.sleep(0.3)
+            s = (await self.p.status()) or 0
+        err = status_error(s)
+        if err:
+            raise RuntimeError(err)
+
     async def print_labels(self, images, p, log, progress, between=None):
+        # Runs of identical labels (copies) become one job with PRINT n, like the vendor app.
+        runs = []
+        for img in images:
+            if runs and runs[-1][0].tobytes() == img.tobytes():
+                runs[-1][1] += 1
+            else:
+                runs.append([img, 1])
         total = len(images)
         progress(0, total)
-        for i, img in enumerate(images, 1):
-            await self.p.print_image(img, p["head_mm"], p["feed_mm"], gap_mm=p["gap_mm"],
-                                     density=p["density"], speed=p["speed"])
-            progress(i, total)
-            log(f"  printed {i}/{total}")
-            await asyncio.sleep(max(1.2, p["feed_mm"] / 25.0 + 0.9))
+        done = previous = 0
+        for img, count in runs:
+            if done:
+                await self._wait_until_idle(previous, p)
+            await self.p.print_image(img, p["head_mm"], p["feed_mm"], density=p["density"],
+                                     speed=p["speed"], copies=count)
+            done += count
+            previous = count
+            progress(done, total)
+            log(f"  sent {count} copies ({done}/{total})" if count > 1 else f"  sent {done}/{total}")
+        await self._wait_until_idle(previous, p)
+        await self.p.send(ALL_END)
 
 
 class SupvanDriver(Driver):
